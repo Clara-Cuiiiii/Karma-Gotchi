@@ -1,0 +1,147 @@
+#include <Adafruit_CircuitPlayground.h>
+
+// 状态机定义
+enum Mode { FORTUNE, MEDITATION };
+Mode currentMode = FORTUNE;
+bool lastButtonState = false;
+
+// --- 算卦模式变量 ---
+unsigned long shakeStartTime = 0;
+unsigned long lastShakeTime = 0;
+bool isShaking = false;
+const float shakeThreshold = 6.0; // 摇晃门槛
+
+// --- 冥想模式变量 ---
+const float tiltThreshold = 0.85; // 5度倾斜的重力分量 (9.8 * sin(5°))
+bool inhalePlayed = false;
+bool exhalePlayed = false;
+
+void setup() {
+  CircuitPlayground.begin();
+  CircuitPlayground.speaker.enable(true);
+}
+
+void loop() {
+  // A键切换模式 (带消抖)
+  bool buttonState = CircuitPlayground.leftButton();
+  if (buttonState && !lastButtonState) {
+    currentMode = (currentMode == FORTUNE) ? MEDITATION : FORTUNE;
+    CircuitPlayground.clearPixels();
+    
+    // 切换提示音：算卦(高音), 冥想(低音)
+    if(currentMode == FORTUNE) {
+       CircuitPlayground.playTone(880, 100);
+    } else {
+       CircuitPlayground.playTone(440, 100);
+    }
+    isShaking = false; 
+    delay(200); 
+  }
+  lastButtonState = buttonState;
+
+  // 执行对应逻辑
+  if (currentMode == FORTUNE) {
+    runFortune();
+  } else {
+    runMeditation();
+  }
+}
+
+// ==========================================
+// 模块 1：算卦 (剥削性连续摇晃)
+// ==========================================
+void runFortune() {
+  float x = CircuitPlayground.motionX();
+  float y = CircuitPlayground.motionY();
+  float z = CircuitPlayground.motionZ();
+  float totalAccel = sqrt(x*x + y*y + z*z);
+  float force = abs(totalAccel - 9.8);
+
+  if (force > shakeThreshold) {
+    if (!isShaking) {
+      isShaking = true;
+      shakeStartTime = millis(); // 记录起摇时间
+    }
+    lastShakeTime = millis(); // 更新最后一次受力时间
+    
+    // 摇晃时的压迫感视觉反馈 (微弱的白光闪烁)
+    if (millis() % 200 < 50) {
+       CircuitPlayground.setPixelColor(random(10), 20, 20, 20);
+    } else {
+       CircuitPlayground.clearPixels();
+    }
+  }
+
+  // 判定摇晃中断 (超过0.5秒没有足够的力)
+  if (isShaking && (millis() - lastShakeTime > 500)) {
+    unsigned long duration = lastShakeTime - shakeStartTime;
+    isShaking = false;
+
+    if (duration >= 30000) {
+      // 1. 达标: 大吉 (绿灯 + 胜利音效)
+      for(int i=0; i<10; i++) CircuitPlayground.setPixelColor(i, 0, 255, 0);
+      CircuitPlayground.playTone(1047, 200);
+      CircuitPlayground.playTone(1318, 400);
+      delay(2000);
+    } 
+    else if (duration > 3000) {
+      // 2. 半途而废: 嘲笑/错误 (橙灯 + 失调下行音效)
+      for(int i=0; i<10; i++) CircuitPlayground.setPixelColor(i, 255, 50, 0);
+      CircuitPlayground.playTone(300, 150);
+      CircuitPlayground.playTone(250, 150);
+      CircuitPlayground.playTone(150, 400);
+      delay(2000);
+    } 
+    else {
+      // 3. 敷衍: 凶 (红灯 + 沉闷音效)
+      for(int i=0; i<10; i++) CircuitPlayground.setPixelColor(i, 255, 0, 0);
+      CircuitPlayground.playTone(100, 800);
+      delay(2000);
+    }
+    CircuitPlayground.clearPixels();
+  }
+}
+
+// ==========================================
+// 模块 2：冥想 (严苛的5度审查)
+// ==========================================
+void runMeditation() {
+  float x = CircuitPlayground.motionX();
+  float y = CircuitPlayground.motionY();
+
+  // 审查倾斜度
+  if (abs(x) > tiltThreshold || abs(y) > tiltThreshold) {
+    // 致命错误：爆闪红灯 + 刺耳高频警报
+    for(int i=0; i<10; i++) CircuitPlayground.setPixelColor(i, 255, 0, 0);
+    CircuitPlayground.playTone(2000, 50);
+    CircuitPlayground.clearPixels();
+    CircuitPlayground.playTone(2500, 50);
+    
+    // 重置呼吸逻辑
+    inhalePlayed = false;
+    exhalePlayed = false;
+  } 
+  else {
+    // 姿态正确：执行 8 秒周期的呼吸引导
+    unsigned long currentMillis = millis();
+    long cycle = currentMillis % 8000; 
+
+    // 光效：正弦波呼吸
+    float breathe = (sin((currentMillis / 8000.0) * 2 * PI - PI/2) + 1.0) / 2.0; 
+    uint8_t brightness = breathe * 80; // 最高亮度限制在80，保持幽暗
+    for(int i=0; i<10; i++) {
+      CircuitPlayground.setPixelColor(i, 0, brightness, brightness); // 青蓝色
+    }
+
+    // 音效：周期提示
+    if (cycle < 100 && !inhalePlayed) {
+        CircuitPlayground.playTone(523, 100); // 吸气提示音 (较高)
+        inhalePlayed = true;
+        exhalePlayed = false;
+    } else if (cycle > 4000 && cycle < 4100 && !exhalePlayed) {
+        CircuitPlayground.playTone(392, 100); // 呼气提示音 (较低)
+        exhalePlayed = true;
+        inhalePlayed = false;
+    }
+  }
+}
